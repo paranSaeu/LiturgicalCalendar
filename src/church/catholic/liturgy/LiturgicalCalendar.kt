@@ -1,0 +1,657 @@
+package church.catholic.liturgy
+
+import church.catholic.liturgy.hash.CoreDay
+import church.catholic.liturgy.hash.DaySet
+import church.catholic.liturgy.hash.LitDay
+import church.catholic.liturgy.hash.LitTemp
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.Year
+import java.time.temporal.TemporalAdjusters
+import java.util.HashMap
+
+/**
+ * 가톨릭 전례력 자바 구현체
+ *
+ * @param targetYear 전례력을 계산할 기준 연도.
+ * ('2025년'인 경우, 2025년 주님 부활을 중심으로
+ * 2024년 대림 제1주일부터, 2025년 12월 31일까지 계산된다.)
+ *
+ */
+class LiturgicalCalendar(
+    val targetYear: Year // '올해' : 전례력을 계산할 기준 연도
+) {
+
+    var calendarMap: HashMap<LocalDate, DaySet>
+        = HashMap<LocalDate, DaySet>(400)
+
+    // 연도를 매개변수로 전달하기 쉽도록 전환
+
+    val initOrdinaryI:    LocalDate // '올해' 주님 세례
+    val endOrdinaryI:     LocalDate // 재의 수요일
+    val initOrdinaryII:   LocalDate // 성령 강림
+    val endOrdinaryII:    LocalDate // '올해' 대림 제1주일
+
+    // 생성자에서 계산을 바로 시도한다.
+    init {
+        val year = targetYear.value
+
+        /*
+         * 계산 순서는 다음과 같다.
+         * 1. 작년 주님 성탄
+         *         가) 작년 대림 시기 (전례력 시작점)
+         *         나) 올해 주님 공현, 주님 세례
+         *         다) 연초 성탄 시기
+         *
+         * 2. 주님 부활
+         *         가) 재의 수요일, 사순 시기, 성주간, 파스카 성삼일
+         *         나) 성령 강림, 주님 승천, 부활 시기
+         *
+         * 3. 올해 주님 성탄
+         *         가) 올해 대림 시기 (전례력 변경점),
+         *      나) 올해-내년 성탄 시기
+         *
+         * 4. 올해 연중 시기
+         *         가) 연중 시기 첫째 부분(주님 세례 - 재의 수요일)
+         *         나) 연중 시기 둘째 부분(성령 강림 - 대림 시기 직전까지)
+         *
+         * 5. 보편 전례력 삽입
+         */
+
+        println("작년") // 작년 주님 성탄
+
+        // calculateChristmas()는 targetYear와 매개변수를 비교해서,
+        // 매개변수가 '작년'이면 '주님 세례'를 반환한다.
+        initOrdinaryI = calculateChristmas(year - 1)
+
+        // 올해 주님 부활
+        endOrdinaryI = calculateEaster(year)
+
+        // 성령 강림은 재의 수요일 95일 뒤이다.
+        initOrdinaryII = endOrdinaryI.plusDays(95)
+
+        // 올해 주님 성탄
+        println("올해")
+        endOrdinaryII = calculateChristmas(year)
+
+        // 올해 연중 시기 연결
+        calculateOrdinaryTime(year)
+    }
+
+    fun updateCalendar(date: LocalDate, newDaySet: DaySet) {
+        if(calendarMap.contains(date)) {
+            var formerDaySet: DaySet = calendarMap.get(date)!!
+
+            formerDaySet.plus(newDaySet)
+
+            calendarMap[date] = formerDaySet
+        } else {
+            calendarMap[date] = newDaySet
+        }
+    }
+
+    private fun calculateChristmas(year: Int): LocalDate{
+        // 1. 주님 성탄
+        val christmas: LocalDate = LocalDate.of(year, 12, 25)
+        calendarMap[christmas] = DaySet(LitDay.of("fix.1225.210.natdo"), litTemp = LitTemp.NATIVITATIS)
+
+        /*
+         * 1-가. 대림 시기
+         *
+         * 성탄 직전 주일은 대림 제4주일이고, 그 3주 전은 대림 제1주일이다.
+         * 성탄이 주일인 경우, 그 전 주일이 대림 제4주일이 된다.
+         *
+         * LocalDate의 DayOfWeek는 월요일부터 1씩 세고, 주일은 7이다.
+         * 따라서 christmas의 DayOfWeek 상수를 날에서 빼주면
+         * '직전 주일'이 나오게 된다.
+         */
+        val da4 = christmas.minusDays(christmas.dayOfWeek.value.toLong())
+        calendarMap[da4] = DaySet(LitDay.of("mov.adve.220.w04d0"), litTemp = LitTemp.ADVENTUS)
+
+        /*
+         * 대림 제4주일에서 1주일씩 빼서 대림 제3, 2, 1주일을 구한다.
+         * LocalDate da4는 불변하는 인스턴스(Immutable Instance)이기 때문에,
+         * da4를 기준으로 계산한다.
+         */
+        for (i in 1..3) {
+            calendarMap[da4.minusWeeks(4L - i)] =
+                DaySet(LitDay.of("mov.adve.220.w0" + i + "d0"), litTemp = LitTemp.ADVENTUS)
+        }
+
+        /*
+         * 대림 시기 평일
+         *
+         * 대림 시기에는 첫째 부분과 둘째 부분이 있다.
+         * 첫째 부분은 대림 제1주일부터 12월 16일까지로,
+         * 평일은 '대림 제n주간 n요일'로 표시한다. (주일은 '대림 제n주일')
+         *
+         * 둘째 부분은 12월 17일부터 24일까지로,
+         * 평일은 '12월 n일'로 표시한다. (주일은 '대림 제n주일')
+         *
+         * 둘째 부분이 있기 때문에,
+         * 첫째 부분은 대림 제3주간 금요일까지만 있다.
+         *
+         * 계산은 간단하게 하기 위해서,
+         * 대림 제3주간 금요일까지 일단 삽입한 다음,
+         * 12월 17일부터 덮어쓰도록 한다.
+         */
+        for (week in 1L..3L) {
+
+            val d: LocalDate = da4.minusWeeks(4L - week)
+
+            for (dow in 1L..6L) {
+                // 대림 제3주간 토요일은 없기 때문에 건너뛴다.
+                if (week == 3L && dow == 6L) {
+                    break // week 3 dow 6은 마지막 루프이다.
+                }
+
+
+                /*
+                 * - da[week]는 불변 객체이므로 기준으로 삼는다.
+                 * - 월요일 = 주일 + 1, 화요일 = 주일 + 2, ..., 토요일 = 주일 + 6
+                 */
+                calendarMap[d.plusDays(dow)] = "/*대림 제" + week + "주간 " + dow + "요일*/"
+            }
+        }
+
+        for (day in 17..24) {
+            // 매 루프 초기화된다.
+            val d: LocalDate = LocalDate.of(year, 12, day)
+
+
+            // 주일은 건너뛴다.
+            if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
+                continue  // 12월 17일 - 24일 사이에 주일이 오는 경우가 있으므로
+            }
+
+
+            // HashMap<K,V>.put()은 Key가 같으면 덮어쓴다.
+            calendarMap[d] = "/*12월 " + day + "일*/"
+        }
+
+        /**
+         * return value
+         *
+         * 이 함수는 입력된 연도의 주님 성탄과,
+         * 주님 성탄 앞의 대림 시기,
+         * 주님 성탄 뒤의 성탄 시기(당해연말-내년초)를 계산한다.
+         *
+         * 대단히 간략하게 말하자면, 올해 대림 시기와 내년 성탄 시기를 계산한다.
+         *
+         * 따라서 전체 전례력을 계산하기 위해서는,
+         * 이 함수는 '두 번' 실행되어야 한다.
+         *
+         * 첫째 실행에서, 매개 변수 `year`는 '작년'이고,
+         * 작년 대림 제1주일부터 올해 주님 세례 축일까지를 계산한다.
+         *
+         * 둘째 실행에서, 매개 변수 `year`는 '올해'이고,
+         * 올해 대림 제1주일부터 12월 31일까지를 계산한다.
+         * (내년 연초 성탄 시기는 필요 없기 때문에 건너뛰도록 한다)
+         *
+         * '올해 주님 세례 축일'과 '올해 대림 제1주일'이
+         * 연중 시기 계산을 위해 필요하다는 것을 고려하면,
+         *
+         * 첫째 실행에서, 이 함수는 '주님 세례'를 반환하고,
+         * 둘째 실행에서, 이 함수는 '대림 제1주일'을 반환해야 한다.
+         */
+        return if(this.targetYear.value == year + 1) {
+            // '작년'을 계산하고 있으면 '다음 해' 곧 올해분을 계산하고 주님 세례를 반환한다.
+
+            // 1-나. 다음 해 주님 공현, 주님 세례
+
+            /**
+             * 주님 공현
+             *
+             * 주님 공현 대축일이 1월 6일이지만,
+             * 의무 축일이 아닌 곳에서는 1월 2일과 8일 사이에 오는 주일에 지낸다.
+             * *(cf. NUALC, nn.37 et 7 §1.)*
+             *
+             * 주님 공현 의무 여부에 따라 주님 공현을 계산한다.
+             */
+            val epiphania: LocalDate = if(true /*주님 공현이 의무인 곳*/) {
+                // 주님 공현이 의무인 곳에서는 1월 6일이 주님 공현이다.
+                LocalDate.of(year + 1, 1, 6)
+            } else {
+                // 주님 공현이 의무 아닌 곳에서는 1월 2일과 8일 사이에 오는 주일이 주님 공현이다.
+                // 계산의 편의를 위해, 1월 1일 다음의 주일을 찾도록 한다.
+                // 1월 1일 다음의 주일은 반드시 1월 2일과 8일 사이에 오기 때문이다.
+                LocalDate.of(year + 1, 1, 1).with(TemporalAdjusters.next(DayOfWeek.SUNDAY))
+            }
+
+            /**
+             * 주님 세례
+             *
+             * 1월 6일 다음 주일에는 주님 세례 축일을 지낸다.
+             * *(cf. NUALC, n.6 §2)*
+             * 공현 대축일을 1월 7일이나 8일에 오는 주일로 옮겨 지내는 곳에서는,
+             * 주님 세례 축일은 바로 다음 월요일에 지낸다.
+             * *(cf. 로마 보편 전례력, 일월.)*
+             *
+             * 주님 세례의 계산은,
+             * - 주님 공현이 1월 7일 전이면 : 주님 공현 다음 주일.
+             * - 주님 공현이 1월 7일 또는 8일이라면, 주님 공현 바로 다음 월요일.
+             * 로 계산하도록 한다.
+             *
+             * `LocalDate.isBefore()`은 '당일'을 포함하지 않기 때문에,
+             * 1월 6일 '까지의' 날을 확인하려면, 1월 7일 '전'인지 확인해야 한다.
+             */
+            val baptismatis: LocalDate = if(epiphania.isBefore(LocalDate.of(year + 1, 1, 7))) {
+                // 주님 공현이 1월 7일 전인 경우 주님 공현 다음 주일이 주님 세례이다.
+                epiphania.with(TemporalAdjusters.next(DayOfWeek.SUNDAY))
+            } else {
+                // 주님 공현이 1월 7일 또는 8일인 경우, 주님 공현 바로 다음 월요일이 주님 세례이다.
+                epiphania.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+            }
+            calendarMap[epiphania] = "/*주님 공현*/"
+            calendarMap[baptismatis] = "/*주님 세례*/"
+
+            /*
+             * 1-다. 연초 성탄 시기
+             *
+             * 성탄 시기는 주님 성탄 대축일 제1 저녁 기도부터 시작하여
+             * 주님 공현 대축일 곧 1월 6일 다음 주일까지 계속된다.
+             * (cf. NUALC, n.33)
+             * 1월 6일 다음 주일에는 주님 세례 축일을 지낸다.
+             * (cf. NUALC, n.6 §2)
+             *
+             * 이상에서, 주님 성탄 대축일 제1 저녁 기도부터 주님 세례 축일까지를
+             * 성탄 시기라고 생각할 수 있다.
+             *
+             * 성탄 시기 계산에 주의할 점은 다음과 같다.
+             *         - 성탄 팔일 축제. (cf. NUALC, n.35) 날짜가 고정되어 있다.
+             *         - 팔일 축제의 주일에 예수, 마리아, 요셉의 성가정 축일을 지낸다.
+             *           그러나 팔일 축제 안에 주일이 없으면 12월 30일에 지낸다.
+             *           (cf. NUALC, n.35 §1)
+             *         - 1월 2일과 5일 사이에 오는 주일은 성탄 후 제2주일이다.
+             *           (cf. NUALC, n.36)
+             *         - 주님 공현 전에 오는 평일은 '주님 공현 전 n요일',
+             *           주님 공현 후에 오는 평일은 '주님 공현 후 n요일'이라고 한다.
+             *           전례문은 공통된 부분도 있고, 다른 부분도 있다.
+             */
+
+            // 성탄 팔일 축제는 날짜가 고정되어 있으므로, 보편 전례력 부분에서 처리한다.
+
+            /*
+             * 예수, 마리아, 요셉의 성가정 축일
+             *
+             * 팔일 축제의 주일에 예수, 마리아, 요셉의 성가정 축일을 지낸다.
+             * 그러나 팔일 축제 안에 주일이 없으면 12월 30일에 지낸다.
+             * (cf. NUALC, n.35 §1)
+             *
+             * 주님 성탄이 주일인 때, 팔일 축제 안에 주일이 없게 된다.
+             */
+            if (christmas.getDayOfWeek() === DayOfWeek.SUNDAY) {
+                calendarMap[LocalDate.of(year, 12, 30)] = "/*성가정 축일*/"
+            } else {
+                for (i in 1L..7L) {
+                    val d: LocalDate = christmas.plusDays(i)
+                    if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
+                        calendarMap[d] = "/*성가정 축일*/"
+                    }
+                }
+            }
+
+
+            /*
+             * 성탄 후 제2주일
+             *
+             * 주님 공현이 의무 아닌 곳에서는
+             * 1월 2일과 8일 사이에 오는 주일이 이미 주님 공현 대축일이고,
+             * 그 다음 주일은 주님 세례 축일 또는 연중 제2주일이기 때문에,
+             * 성탄 후 제2주일을 가질 수 없다.
+             *
+             * 곧, 주님 공현이 의무인 곳이어서 주님 공현을 1월 6일에 지내는 곳에서만
+             * 1월 2일과 5일 사이에 오는 주일에 성탄 후 제2주일을 가진다.
+             * 다만 1월 2일부터 5일까지 전부 평일인 경우에는 성탄 후 제2주일이 없다.
+             */
+
+            // 주님 공현이 의무인지 확인한다.
+            if (true /*주님 공현이 의무인 곳*/) {
+                for (day in 2..5) {
+                    val d: LocalDate = LocalDate.of(year + 1, 1, day)
+                    if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
+                        calendarMap[d] = "/*성탄 후 제2주일*/"
+                    }
+                }
+            }
+
+
+            /*
+             * 성탄 시기 평일
+             *
+             * 성탄 시기 평일은 1월 2일부터 주님 세례 축일 전 토요일까지이다.
+             *
+             * 주님 공현 전에 오는 평일은 '주님 공현 전 n요일',
+             * 주님 공현 후에 오는 평일은 '주님 공현 후 n요일'이라고 한다.
+             * 전례문은 공통된 부분도 있고, 다른 부분도 있다.
+             *
+             * 계산의 편의를 위해,
+             * 1월 2일부터 주님 세례 축일 전날까지 날짜를 따라가며 주일을 건너뛴다.
+             */
+            for (day in 2..<baptismatis.dayOfMonth) {
+                val d: LocalDate = LocalDate.of(year + 1, 1, day)
+
+
+                // 주일과 주님 공현을 건너뛴다.
+                // 주님 공현이 의무인 곳에서는 주님 공현이 평일일 수 있기 때문이다.
+                if (d.getDayOfWeek() === DayOfWeek.SUNDAY) continue
+                if (d.isEqual(epiphania)) continue
+
+                if (d.isBefore(epiphania)) {
+                    calendarMap[d] = "/*주님 공현 전 " + d.getDayOfWeek().value + "요일*/"
+                } else {
+                    calendarMap[d] = "/*주님 공현 후 " + d.getDayOfWeek().value + "요일*/"
+                }
+            }
+
+            // 작년을 계산하고 있었기 때문에, 주님 세례를 반환한다.
+            baptismatis
+
+        } else {
+            // 올해를 계산하고 있으면, 다음 해 부분의 계산은 건너뛰고
+            // 대림 제1주일을 반환한다.
+            da4.minusWeeks(3)
+        }
+    }
+
+    private fun calculateEaster(year: Int): LocalDate{
+        // 2. 주님 부활
+        val easter: LocalDate = getEasterDate(year)
+        calendarMap[easter] = DaySet(CoreDay.DOMINICA_PASCHALIS, litTemp = LitTemp.PASCHALIS)
+        updateCalendar(
+            easter,
+            DaySet(CoreDay.DOMINICA_PASCHALIS, litTemp = LitTemp.PASCHALIS)
+        )
+        /*
+         * 2-가. 재의 수요일, 사순 시기, 성주간, 파스카 성삼일
+         *
+         * 주님 부활 대축일에서 역순으로 되돌아가면 모두 계산할 수 있다.
+         */
+
+        // 파스카 성삼일 : 주님 부활 1, 2, 3일 전(성주간 목요일은 따로 처리)
+        for (i in 1L..3L) {
+            calendarMap[easter.minusDays(i)] = "/*성" + (7 - i) + "요일*/"
+        }
+
+
+        // 성주간 : 주님 부활 7, 6, 5, 4, 3일 전(성주간 목요일은 따로 처리)
+        for (i in 4L..7L) {
+            if (i == 7L) {
+                calendarMap[easter.minusDays(i)] = "/*주님 수난 성지 주일*/"
+                break
+            }
+            calendarMap[easter.minusDays(i)] = "/*성주간 " + (7 - i) + "요일*/"
+        }
+
+
+        /*
+         * 사순 시기의 주일과 평일
+         *
+         * 이 시기의 주일은 사순 제1, 2, 3, 4, 5주일이라 부른다.
+         * 성주간이 시작되는 사순 제6주일은 '주님 수난 성지 주일'이라 한다.
+         * (cf. NUALC, n.30)
+         *
+         * 계산에 있어서,
+         * 주님 수난 성지 주일은 성주간과 함께 처리했기 때문에 제외한다.
+         * 사순 제6주간 평일은 성주간 그 자체이기 때문에 제외한다.
+         */
+        for (week in 1L..5L) {
+            val d: LocalDate = easter.minusWeeks(7 - week)
+            calendarMap[d] = "/*사순 제" + week + "주일*/"
+
+            for (dow in 1L..6L) {
+                calendarMap[d.plusDays(dow)] = "/*사순 제" + week + "주간 " + dow + "요일*/"
+            }
+        }
+
+
+        /*
+         * 재의 수요일
+         *
+         * 재의 수요일의 날짜를 규정하는 명문 규정은 없다.
+         * 다만, 언제나 사순 제1주일 전 수요일이고,
+         * 날짜로 계산하면 주님 부활 46일 전이다.
+         *
+         * 재의 수요일에 이어지는 평일은 '재의 예식 다음 n요일'로 불린다.
+         */
+        val cinerum: LocalDate = easter.minusDays(46)
+
+        calendarMap[cinerum] = "/*재의 수요일*/"
+
+        for (i in 4..6) {
+            calendarMap[cinerum.with(DayOfWeek.of(i))] = "/*재의 예식 다음 " + i + "요일*/"
+        }
+
+
+        /*
+         * 2-나. 성령 강림, 주님 승천, 부활 시기
+         *
+         * 주님 부활 대축일 다음 주일들을
+         * 부활 제2, 3, 4, 5, 6, 7주일이라 부른다.
+         * 이 거룩한 50일 동안 지내는 부활 시기는
+         * 성령 강림 대축일로 끝난다.
+         * (cf. NUALC, n.23)
+         *
+         * 부활 시기를 시작하는 팔일은 부활 팔일 축제를 이루며
+         * 주님의 대축일로 지낸다.
+         * (cf. NUALC, n.24)
+         *
+         * 주님 부활 대축일 다음 40일에는 주님의 승천을 경축한다.
+         * 이날을 의무 축일로 지내지 않는 지역에서는
+         * 부활 제7주일이 주님 승천 대축일로 지정된다.
+         * (cf. NUALC, n.25. 7 §2)
+         *
+         * 계산은 단순히 날짜를 더하기만 하면 된다.
+         */
+
+        // 부활 팔일 축제를 계산한다.
+        for (i in 1L..6L) {
+            calendarMap[easter.plusDays(i)] = "/*부활 팔일 축제 " + i + "요일*/"
+        }
+
+
+        /*
+         * 주님 승천
+         *
+         * 주님 승천이 의무인 곳에서는
+         * 주님 부활 대축일 다음 40일, 곧 부활 제6주간 목요일에,
+         *
+         * 의무 아닌 곳에서는 부활 제7주일에 거행한다.
+         */
+
+        // 부활 시기를 계산한다.
+        for (week in 2L..7L) {
+            val d: LocalDate = easter.plusWeeks(week - 1)
+            calendarMap[d] = "/*부활 제" + week + "주일*/"
+            if (false /*주님 승천이 의무 아닌 곳*/) {
+                if (week == 7L) { // 부활 제7주일에
+                    calendarMap[d] = "/*주님 승천*/"
+                }
+            }
+
+            for (dow in 1L..6L) {
+                calendarMap[d.plusDays(dow)] = "/*부활 제" + week + "주간 " + dow + "요일*/"
+                if (true /*주님 승천이 의무인 곳*/) {
+                    if (week == 6L && dow == 4L) { // 부활 제6주간 목요일에
+                        calendarMap[d.plusDays(dow)] = "/*주님 승천*/"
+                    }
+                }
+            }
+        }
+
+        // 성령 강림 : 부활 제8주일
+        val pentecostes: LocalDate = easter.plusWeeks(7)
+        calendarMap[pentecostes] = "/*성령 강림*/"
+
+        return cinerum
+    }
+
+    /**
+     * 올해 연중 시기를 계산하는 함수
+     *
+     * 반드시 미리 `calculateChristmas()`,
+     * `calculateEaster()`를 호출한 다음에 사용해야 한다.
+     *
+     * 연중 시기는 1월 6일 다음 주일에 뒤따르는 월요일에 시작하여
+     * 사순 시기 전 화요일까지 계속된다.
+     * 그리고 성령 강림 대축일 다음 월요일에 다시 시작하여
+     * 대림 제1주일의 제1 저녁 기도 직전에 끝난다.
+     * *(cf. NUALC, n.44)*
+     *
+     * 계산을 위해서,
+     * 연중 시기 첫째 부분은 주님 세례 축일 다음 날부터
+     * 재의 수요일 전날까지,
+     *
+     * 연중 시기 둘째 부분은 성령 강림 대축일 다음 날부터
+     * 대림 제1주일 전날까지로 계산한다.
+     *
+     * @param year 연중 시기를 구하고자 하는 연도
+     */
+    private fun calculateOrdinaryTime(year: Int) {
+
+        // 연중 시기 첫째 부분
+        var ordinary2: LocalDate = initOrdinaryI.plusWeeks(1)
+
+
+        // 연중 제1주간을 삽입한다.
+        for (dow in 1L..6L) {
+            val d: LocalDate = initOrdinaryI.plusDays(dow)
+            if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
+                ordinary2 = d
+                break
+            }
+            calendarMap[d] = "/*연중 제1주간 " + dow + "요일*/"
+        }
+
+
+        // 연중 시기 첫째 부분 마지막 주
+        var ordinaryWeekI: Long?
+
+        var week = 2L
+        weekLoop@ while (true) {
+            val d: LocalDate = ordinary2.plusWeeks(week - 2)
+            calendarMap[d] = "/*연중 제" + week + "주일*/"
+
+            for (dow in 1L..6L) {
+                val df: LocalDate = d.plusDays(dow)
+                if (df.isEqual(endOrdinaryI)) {
+                    ordinaryWeekI = week
+                    break@weekLoop
+                }
+                calendarMap[df] = "/*연중 제" + week + "주간 " + dow + "요일*/"
+            }
+            week++
+        }
+
+        // 연중 시기 둘째 부분
+
+        // 대림 제1주일 전 주는 연중 제34주간이다.
+        val ordinary34: LocalDate = endOrdinaryII.minusWeeks(1)
+
+        for (week in 34 downTo ordinaryWeekI + 1) {
+            val d: LocalDate = ordinary34.minusWeeks(34 - week)
+
+            for (dow in 1L..6L) {
+                calendarMap[d.plusDays(dow)] = "/*연중 제" + week + "주간 " + dow + "요일*/"
+            }
+
+            if (!d.isEqual(initOrdinaryII)) {
+                calendarMap[d] = "/*연중 제" + week + "주일*/"
+            } else {
+                break
+            }
+
+            // 그리스도왕 대축일
+            if (week == 34L) {
+                calendarMap[d] = "/*그리스도왕 대축일*/"
+            }
+        }
+    }
+
+    /**
+     * 주님 부활의 날짜 계산
+     *
+     * 주님 부활의 날짜는 흔히 '춘분 후 만월 다음 주일'로 알려져 있다.
+     *
+     * 주님 수난과 부활의 파스카 축제는 유다 달력에서 니산 달 14일이었다.
+     * 그래서 초기 그리스도교 공동체는 유다 달력의 니산 달 14일을
+     * 요일에 상관하지 않고 주님 부활로 지냈다.
+     *
+     * 그러나 점점 초기 그리스도교 공동체 가운데에서
+     * 주님 부활을 '주일'에 거행하려는 관습이나,
+     * 유다인들의 윤년 계산에 의문을 품고, '그리스도교식' 니산 달을
+     * '춘분' 뒤로 오도록 계산하여 주님 부활을 거행하려는 관습 등이 생겨났다.
+     * 이러한 관습들이 난립하면서 지역마다 주님 부활을 다른 날에 거행하는 문제가 생겼다.
+     *
+     * 이에 325년 제1차 니케아 보편 공의회는 주님 부활의 계산에 있어서,
+     * - 음력을 사용하는 유다 달력에서 독립할 것,
+     * - 전 세계가 로마와 알렉산드리아 교회가 주님 부활 대축일을 거행하는 날과
+     * 동일한 날에 주님 부활 대축일을 거행할 것을 결정했다.
+     * 이 결정에 힘입어 교회는 당시 로마 달력이었던 율리우스력을 사용해,
+     * 춘분을 3월 21일로 고정하고 춘분과 망일(보름)을 기준으로
+     * 주님 부활을 계산하기 시작했다.
+     *
+     * 그러나 율리우스력은 365.2422년의 실제 태양 공전 주기를 정확히 반영하지 못했고,
+     * 오차가 누적되어 1582년에 이르러서는 실제 천문학적 춘분이 3월 11일에 오는 등
+     * 날짜가 정확하지 못한 문제가 있었다.
+     *
+     * 이에 1582년 그레고리오 13세 교황은
+     * 그레고리력을 설정하는 교령 Inter Gravissimas을 선포하여,
+     * - 1582년 10월 5일 다음날을 10월 15일로 하여 오차를 삭제하고
+     * 춘분 날짜를 3월 21일로 복원하였으며,
+     * - 새로운 역법인 그레고리력을 설정하여 오차를 보정하였다.
+     *
+     * 위 교령에서 그레고리오 교황은 부활절 계산의 요소로 3가지를 언급하는데,
+     * - 정확한 춘분의 일자,
+     * - 정월[그리스도교식 니산 달, 곧 음력] 14일,
+     * - 정월 14일의 바로 다음 주일이다.
+     *
+     * 우리가 흔히 말하는 춘분 후 만월 다음 주일은 이 교령에서 비롯되었다.
+     * 교령에서 14일이라고 하였지만 흔히 '만월' 곧 음력 15일을 언급하는 이유는,
+     * 교령이 언급하는 음력 14일은 춘분 당일일 수 있기 때문이기도 하고,
+     * '만월'이 더 도드라진 날로서 기억하기 쉽기 때문일 것이다.
+     */
+
+    /**
+     * 주님 부활의 날짜를 계산하는 함수
+     *
+     *
+     * 주님 부활의 날짜는 흔히 '춘분 후 만월 다음 주일'로 알려져 있지만,
+     * 이를 실제로 천문학적으로 계산하려면 태양과 달의 궤도를 모두 계산해야 한다.
+     *
+     *
+     * 다만, 존경하올 수학자들이 오랜 시간을 거쳐 여러 방법으로
+     * 사칙 연산을 통해 주님 부활의 날짜를 계산하는 알고리즘을 제안해 왔다.
+     *
+     *
+     * 본인은 이러한 수학적 성과를 기꺼이 받아들여 주님 부활의 날짜를 계산한다.
+     * 특히 이 함수에서는 수정된 익명 그레고리안 함수를 적용한다.
+     *
+     *
+     *
+     * Originated from: Anonymous (20 April 1876). "To find Easter". *Nature*: 487. <br></br>
+     * Modified by: O'Beirne, T.H. (30 March 1961). "How ten divisions lead to Easter".
+     * *New Scientist*. 9 (228): 828.
+     *
+     *
+     * @param year 주님 부활의 날짜를 구하고자 하는 연도.
+     * @return 주님 부활의 날짜를 담은 `LocalDate` 객체.
+     */
+    private fun getEasterDate(year: Int): LocalDate {
+        val a = year % 19
+        val b = year / 100
+        val c = year % 100
+        val d = b / 4
+        val e = b % 4
+        val g = (8 * b + 13) / 25
+        val h = (19 * a + b - d - g + 15) % 30
+        val i = c / 4
+        val k = c % 4
+        val l = (32 + 2 * e + 2 * i - h - k) % 7
+        val m = (a + 11 * h + 19 * l) / 433
+        val n = (h + l - 7 * m + 90) / 25 // the month of the Easter day.
+        val p = (h + l - 7 * m + 33 * n + 19) % 32 // the date of the Easter day.
+
+        return LocalDate.of(year, n, p)
+    }
+}
