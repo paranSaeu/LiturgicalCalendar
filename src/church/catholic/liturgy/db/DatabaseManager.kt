@@ -3,8 +3,9 @@ package church.catholic.liturgy.db
 import java.io.Closeable
 import java.sql.*
 
-class DatabaseManager(private val jdbcUrl: String) : Closeable {
+class DatabaseManager : Closeable {
 
+    private val jdbcUrl: String = ""
     private var conn: Connection? = null
 
     /** 1) 연결 시작 */

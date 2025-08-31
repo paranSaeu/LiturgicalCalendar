@@ -1,14 +1,11 @@
 package church.catholic.liturgy
 
-import church.catholic.liturgy.hash.CoreDay
-import church.catholic.liturgy.hash.DaySet
-import church.catholic.liturgy.hash.LitDay
-import church.catholic.liturgy.hash.LitTemp
+import church.catholic.liturgy.day.*
+import church.catholic.liturgy.db.*
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.Year
 import java.time.temporal.TemporalAdjusters
-import java.util.HashMap
 
 /**
  * 가톨릭 전례력 자바 구현체
@@ -22,8 +19,9 @@ class LiturgicalCalendar(
     val targetYear: Year // '올해' : 전례력을 계산할 기준 연도
 ) {
 
-    var calendarMap: HashMap<LocalDate, DaySet>
-        = HashMap<LocalDate, DaySet>(400)
+    //var calendarMap: HashMap<LocalDate, DayHash> = HashMap(400)
+    val calendarMapper = CalendarMapper()
+    val registry = LitDayRegistry()
 
     // 연도를 매개변수로 전달하기 쉽도록 전환
 
@@ -75,25 +73,18 @@ class LiturgicalCalendar(
         endOrdinaryII = calculateChristmas(year)
 
         // 올해 연중 시기 연결
-        calculateOrdinaryTime(year)
-    }
-
-    fun updateCalendar(date: LocalDate, newDaySet: DaySet) {
-        if(calendarMap.contains(date)) {
-            var formerDaySet: DaySet = calendarMap.get(date)!!
-
-            formerDaySet.plus(newDaySet)
-
-            calendarMap[date] = formerDaySet
-        } else {
-            calendarMap[date] = newDaySet
-        }
+        calculateOrdinaryTime()
     }
 
     private fun calculateChristmas(year: Int): LocalDate{
         // 1. 주님 성탄
         val christmas: LocalDate = LocalDate.of(year, 12, 25)
-        calendarMap[christmas] = DaySet(LitDay.of("fix.1225.210.natdo"), litTemp = LitTemp.NATIVITATIS)
+
+        calendarMapper.update(
+            christmas,
+            registry.find("fix.1225.210.natdo"),
+            LitTemp.NATIVITATIS
+        )
 
         /*
          * 1-가. 대림 시기
@@ -106,16 +97,22 @@ class LiturgicalCalendar(
          * '직전 주일'이 나오게 된다.
          */
         val da4 = christmas.minusDays(christmas.dayOfWeek.value.toLong())
-        calendarMap[da4] = DaySet(LitDay.of("mov.adve.220.w04d0"), litTemp = LitTemp.ADVENTUS)
+        calendarMapper.update(
+            da4,
+            registry.findSunday(LitTemp.ADVENTUS, 4)
+        )
 
         /*
          * 대림 제4주일에서 1주일씩 빼서 대림 제3, 2, 1주일을 구한다.
          * LocalDate da4는 불변하는 인스턴스(Immutable Instance)이기 때문에,
          * da4를 기준으로 계산한다.
          */
-        for (i in 1..3) {
-            calendarMap[da4.minusWeeks(4L - i)] =
-                DaySet(LitDay.of("mov.adve.220.w0" + i + "d0"), litTemp = LitTemp.ADVENTUS)
+        for (i in 3..1) {
+
+            calendarMapper.update(
+                da4.minusWeeks(4L - i),
+                registry.findSunday(LitTemp.ADVENTUS, i)
+            )
         }
 
         /*
@@ -145,12 +142,18 @@ class LiturgicalCalendar(
                     break // week 3 dow 6은 마지막 루프이다.
                 }
 
-
                 /*
-                 * - da[week]는 불변 객체이므로 기준으로 삼는다.
-                 * - 월요일 = 주일 + 1, 화요일 = 주일 + 2, ..., 토요일 = 주일 + 6
+                 * - d는 불변 객체이므로 기준으로 삼는다.
                  */
-                calendarMap[d.plusDays(dow)] = "/*대림 제" + week + "주간 " + dow + "요일*/"
+                val wd = d.plusDays(dow)
+
+                calendarMapper.update(
+                    wd,
+                    registry.findWeekdays(
+                        LitTemp.ADVENTUS,
+                        week.toInt()
+                    )[wd.dayOfWeek]
+                )
             }
         }
 
@@ -158,15 +161,25 @@ class LiturgicalCalendar(
             // 매 루프 초기화된다.
             val d: LocalDate = LocalDate.of(year, 12, day)
 
-
             // 주일은 건너뛴다.
             if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
                 continue  // 12월 17일 - 24일 사이에 주일이 오는 경우가 있으므로
             }
 
+            val id = buildString {
+                append("fix").append(".")
+                append("12").append(day).append(".")
+                append(LitGrade.FERIAE_ADV_II).append(".")
+                append("die").append(day)
+            }
 
-            // HashMap<K,V>.put()은 Key가 같으면 덮어쓴다.
-            calendarMap[d] = "/*12월 " + day + "일*/"
+            calendarMapper.override(
+                d,
+                DayHash.of(
+                    registry.find(id),
+                    litTemp = LitTemp.ADVENTUS
+                )
+            )
         }
 
         /**
@@ -235,15 +248,22 @@ class LiturgicalCalendar(
              * `LocalDate.isBefore()`은 '당일'을 포함하지 않기 때문에,
              * 1월 6일 '까지의' 날을 확인하려면, 1월 7일 '전'인지 확인해야 한다.
              */
-            val baptismatis: LocalDate = if(epiphania.isBefore(LocalDate.of(year + 1, 1, 7))) {
+            val baptismate: LocalDate = if(epiphania.isBefore(LocalDate.of(year + 1, 1, 7))) {
                 // 주님 공현이 1월 7일 전인 경우 주님 공현 다음 주일이 주님 세례이다.
                 epiphania.with(TemporalAdjusters.next(DayOfWeek.SUNDAY))
             } else {
                 // 주님 공현이 1월 7일 또는 8일인 경우, 주님 공현 바로 다음 월요일이 주님 세례이다.
                 epiphania.with(TemporalAdjusters.next(DayOfWeek.MONDAY))
             }
-            calendarMap[epiphania] = "/*주님 공현*/"
-            calendarMap[baptismatis] = "/*주님 세례*/"
+
+            calendarMapper.update(
+                epiphania,
+                registry.find("mov.nati.210.epiph")
+            )
+            calendarMapper.update(
+                baptismate,
+                registry.find("mov.nati.510.bapti")
+            )
 
             /*
              * 1-다. 연초 성탄 시기
@@ -281,12 +301,18 @@ class LiturgicalCalendar(
              * 주님 성탄이 주일인 때, 팔일 축제 안에 주일이 없게 된다.
              */
             if (christmas.getDayOfWeek() === DayOfWeek.SUNDAY) {
-                calendarMap[LocalDate.of(year, 12, 30)] = "/*성가정 축일*/"
+                calendarMapper.update(
+                    LocalDate.of(year, 12, 30),
+                    registry.find("mov.nati.510.famil")
+                )
             } else {
                 for (i in 1L..7L) {
                     val d: LocalDate = christmas.plusDays(i)
                     if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
-                        calendarMap[d] = "/*성가정 축일*/"
+                        calendarMapper.update(
+                            d,
+                            registry.find("mov.nati.510.famil")
+                        )
                     }
                 }
             }
@@ -310,11 +336,13 @@ class LiturgicalCalendar(
                 for (day in 2..5) {
                     val d: LocalDate = LocalDate.of(year + 1, 1, day)
                     if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
-                        calendarMap[d] = "/*성탄 후 제2주일*/"
+                        calendarMapper.update(
+                            d,
+                            registry.findSunday(LitTemp.NATIVITATIS, 2)
+                        )
                     }
                 }
             }
-
 
             /*
              * 성탄 시기 평일
@@ -328,24 +356,29 @@ class LiturgicalCalendar(
              * 계산의 편의를 위해,
              * 1월 2일부터 주님 세례 축일 전날까지 날짜를 따라가며 주일을 건너뛴다.
              */
-            for (day in 2..<baptismatis.dayOfMonth) {
+            for (day in 2..<baptismate.dayOfMonth) {
                 val d: LocalDate = LocalDate.of(year + 1, 1, day)
-
 
                 // 주일과 주님 공현을 건너뛴다.
                 // 주님 공현이 의무인 곳에서는 주님 공현이 평일일 수 있기 때문이다.
                 if (d.getDayOfWeek() === DayOfWeek.SUNDAY) continue
                 if (d.isEqual(epiphania)) continue
 
-                if (d.isBefore(epiphania)) {
-                    calendarMap[d] = "/*주님 공현 전 " + d.getDayOfWeek().value + "요일*/"
-                } else {
-                    calendarMap[d] = "/*주님 공현 후 " + d.getDayOfWeek().value + "요일*/"
-                }
+                calendarMapper.update(
+                    d,
+                    registry.findWeekdays(
+                        LitTemp.NATIVITATIS,
+                        if(d.isBefore(epiphania)) {
+                            1 // 주님 공현 전 주간을 DB에서는 성탄 제1주간으로 간주
+                        } else {
+                            2 // 주님 공현 후 주간을 DB에서는 성탄 제2주간으로 간주
+                        }
+                    )[d.dayOfWeek]
+                )
             }
 
             // 작년을 계산하고 있었기 때문에, 주님 세례를 반환한다.
-            baptismatis
+            baptismate
 
         } else {
             // 올해를 계산하고 있으면, 다음 해 부분의 계산은 건너뛰고
@@ -357,11 +390,15 @@ class LiturgicalCalendar(
     private fun calculateEaster(year: Int): LocalDate{
         // 2. 주님 부활
         val easter: LocalDate = getEasterDate(year)
-        calendarMap[easter] = DaySet(CoreDay.DOMINICA_PASCHALIS, litTemp = LitTemp.PASCHALIS)
-        updateCalendar(
+
+        calendarMapper.update(
             easter,
-            DaySet(CoreDay.DOMINICA_PASCHALIS, litTemp = LitTemp.PASCHALIS)
+            registry.findSunday(
+                LitTemp.PASCHALIS,
+                1
+            )
         )
+
         /*
          * 2-가. 재의 수요일, 사순 시기, 성주간, 파스카 성삼일
          *
@@ -370,19 +407,46 @@ class LiturgicalCalendar(
 
         // 파스카 성삼일 : 주님 부활 1, 2, 3일 전(성주간 목요일은 따로 처리)
         for (i in 1L..3L) {
-            calendarMap[easter.minusDays(i)] = "/*성" + (7 - i) + "요일*/"
+            calendarMapper.update(
+                easter.minusDays(i),
+                registry.find(
+                    DayCat.MOVEABLE_FEAST,
+                    LitTemp.PASCHALIS.toString(),
+                    LitGrade.TRIDUUM_PASCHALE,
+                    when(i) {
+                        1L -> "sabsa"   // 1일 전 : 성토요일
+                        2L -> "pasdo"   // 2일 전 : 성금요일
+                        3L -> "cendo"   // 3일 전 : 성목요일
+                        else -> ""      // 그럴 일이 없음
+                    }
+                )
+            )
         }
 
 
-        // 성주간 : 주님 부활 7, 6, 5, 4, 3일 전(성주간 목요일은 따로 처리)
-        for (i in 4L..7L) {
+        // 성주간 : 주님 부활 7, 6, 5, 4, 3일 전(성주간 목요일은 여기서 처리)
+        for (i in 3L..7L) {
+            val d = easter.minusDays(i)
+
             if (i == 7L) {
-                calendarMap[easter.minusDays(i)] = "/*주님 수난 성지 주일*/"
+                calendarMapper.update(
+                    d,
+                    registry.findSunday(
+                        LitTemp.QUADRAGESIMAE,
+                        6   // 주님 수난 성지 주일은 DB에서 사순 제6주일로 간주
+                    )
+                )
                 break
             }
-            calendarMap[easter.minusDays(i)] = "/*성주간 " + (7 - i) + "요일*/"
-        }
 
+            calendarMapper.update(
+                d,
+                registry.findWeekdays(
+                    LitTemp.QUADRAGESIMAE,
+                    6   // 성주간은 DB에서 사순 제6주간으로 간주 (다만 목요일까지만 있음)
+                )[d.dayOfWeek]
+            )
+        }
 
         /*
          * 사순 시기의 주일과 평일
@@ -397,10 +461,23 @@ class LiturgicalCalendar(
          */
         for (week in 1L..5L) {
             val d: LocalDate = easter.minusWeeks(7 - week)
-            calendarMap[d] = "/*사순 제" + week + "주일*/"
+            calendarMapper.update(
+                d,
+                registry.findSunday(
+                    LitTemp.QUADRAGESIMAE,
+                    week.toInt()
+                )
+            )
 
             for (dow in 1L..6L) {
-                calendarMap[d.plusDays(dow)] = "/*사순 제" + week + "주간 " + dow + "요일*/"
+                val wd = d.plusDays(dow)
+                calendarMapper.update(
+                    wd,
+                    registry.findWeekdays(
+                        LitTemp.QUADRAGESIMAE,
+                        week.toInt()
+                    )[wd.dayOfWeek]
+                )
             }
         }
 
@@ -416,10 +493,14 @@ class LiturgicalCalendar(
          */
         val cinerum: LocalDate = easter.minusDays(46)
 
-        calendarMap[cinerum] = "/*재의 수요일*/"
-
-        for (i in 4..6) {
-            calendarMap[cinerum.with(DayOfWeek.of(i))] = "/*재의 예식 다음 " + i + "요일*/"
+        for (i in 3..6) {
+            calendarMapper.update(
+                cinerum.with(DayOfWeek.of(i)),
+                registry.findWeekdays(
+                    LitTemp.QUADRAGESIMAE,
+                    0   // 재의 수요일과 재의 수요일 다음 평일은 DB에서 사순 제0주일로 간주한다. (다만 수요일부터 있음)
+                )[cinerum.dayOfWeek]
+            )
         }
 
 
@@ -446,7 +527,14 @@ class LiturgicalCalendar(
 
         // 부활 팔일 축제를 계산한다.
         for (i in 1L..6L) {
-            calendarMap[easter.plusDays(i)] = "/*부활 팔일 축제 " + i + "요일*/"
+            val d = easter.plusDays(i)
+            calendarMapper.update(
+                d,
+                registry.findWeekdays(
+                    LitTemp.PASCHALIS,
+                    1   // 부활 팔일 축제는 DB에서 부활 제1주간으로 간주한다
+                )[d.dayOfWeek]
+            )
         }
 
 
@@ -462,18 +550,45 @@ class LiturgicalCalendar(
         // 부활 시기를 계산한다.
         for (week in 2L..7L) {
             val d: LocalDate = easter.plusWeeks(week - 1)
-            calendarMap[d] = "/*부활 제" + week + "주일*/"
+
+            calendarMapper.update(
+                d,
+                registry.findSunday(
+                    LitTemp.PASCHALIS,
+                    week.toInt()
+                )
+            )
+
             if (false /*주님 승천이 의무 아닌 곳*/) {
                 if (week == 7L) { // 부활 제7주일에
-                    calendarMap[d] = "/*주님 승천*/"
+                    calendarMapper.override(
+                        d,
+                        DayHash.of(
+                            registry.find("mov.psch.210.ascen"),
+                            litTemp = LitTemp.PASCHALIS
+                        )
+                    )
                 }
             }
 
             for (dow in 1L..6L) {
-                calendarMap[d.plusDays(dow)] = "/*부활 제" + week + "주간 " + dow + "요일*/"
+                val wd = d.plusDays(dow)
+                calendarMapper.update(
+                    wd,
+                    registry.findWeekdays(
+                        LitTemp.PASCHALIS,
+                        week.toInt()
+                    )[wd.dayOfWeek]
+                )
                 if (true /*주님 승천이 의무인 곳*/) {
                     if (week == 6L && dow == 4L) { // 부활 제6주간 목요일에
-                        calendarMap[d.plusDays(dow)] = "/*주님 승천*/"
+                        calendarMapper.override(
+                            wd,
+                            DayHash.of(
+                                registry.find("mov.psch.210.ascen"),
+                                litTemp = LitTemp.PASCHALIS
+                            )
+                        )
                     }
                 }
             }
@@ -481,7 +596,13 @@ class LiturgicalCalendar(
 
         // 성령 강림 : 부활 제8주일
         val pentecostes: LocalDate = easter.plusWeeks(7)
-        calendarMap[pentecostes] = "/*성령 강림*/"
+        calendarMapper.update(
+            pentecostes,
+            registry.findSunday(
+                LitTemp.PASCHALIS,
+                8
+            )
+        )
 
         return cinerum
     }
@@ -504,10 +625,8 @@ class LiturgicalCalendar(
      *
      * 연중 시기 둘째 부분은 성령 강림 대축일 다음 날부터
      * 대림 제1주일 전날까지로 계산한다.
-     *
-     * @param year 연중 시기를 구하고자 하는 연도
      */
-    private fun calculateOrdinaryTime(year: Int) {
+    private fun calculateOrdinaryTime() {
 
         // 연중 시기 첫째 부분
         var ordinary2: LocalDate = initOrdinaryI.plusWeeks(1)
@@ -520,7 +639,13 @@ class LiturgicalCalendar(
                 ordinary2 = d
                 break
             }
-            calendarMap[d] = "/*연중 제1주간 " + dow + "요일*/"
+            calendarMapper.update(
+                d,
+                registry.findWeekdays(
+                    LitTemp.PER_ANNUM,
+                    1
+                )[d.dayOfWeek]
+            )
         }
 
 
@@ -530,7 +655,13 @@ class LiturgicalCalendar(
         var week = 2L
         weekLoop@ while (true) {
             val d: LocalDate = ordinary2.plusWeeks(week - 2)
-            calendarMap[d] = "/*연중 제" + week + "주일*/"
+            calendarMapper.update(
+                d,
+                registry.findSunday(
+                    LitTemp.PER_ANNUM,
+                    week.toInt()
+                )
+            )
 
             for (dow in 1L..6L) {
                 val df: LocalDate = d.plusDays(dow)
@@ -538,7 +669,13 @@ class LiturgicalCalendar(
                     ordinaryWeekI = week
                     break@weekLoop
                 }
-                calendarMap[df] = "/*연중 제" + week + "주간 " + dow + "요일*/"
+                calendarMapper.update(
+                    df,
+                    registry.findWeekdays(
+                        LitTemp.PER_ANNUM,
+                        week.toInt()
+                    )[df.dayOfWeek]
+                )
             }
             week++
         }
@@ -552,18 +689,28 @@ class LiturgicalCalendar(
             val d: LocalDate = ordinary34.minusWeeks(34 - week)
 
             for (dow in 1L..6L) {
-                calendarMap[d.plusDays(dow)] = "/*연중 제" + week + "주간 " + dow + "요일*/"
+                val wd = d.plusDays(dow)
+                calendarMapper.update(
+                    wd,
+                    registry.findWeekdays(
+                        LitTemp.PER_ANNUM,
+                        week.toInt()
+                    )[wd.dayOfWeek]
+                )
             }
 
             if (!d.isEqual(initOrdinaryII)) {
-                calendarMap[d] = "/*연중 제" + week + "주일*/"
+
+                // 그리스도왕 대축일은 DB에서 연중 제34주일로 간주된다.
+                calendarMapper.update(
+                    d,
+                    registry.findSunday(
+                        LitTemp.PER_ANNUM,
+                        week.toInt()
+                    )
+                )
             } else {
                 break
-            }
-
-            // 그리스도왕 대축일
-            if (week == 34L) {
-                calendarMap[d] = "/*그리스도왕 대축일*/"
             }
         }
     }
