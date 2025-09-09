@@ -1,7 +1,6 @@
 package church.catholic.liturgy.day
 
-import church.catholic.liturgy.db.DatabaseManager
-import java.text.DecimalFormat
+import church.catholic.liturgy.db.*
 import java.time.DayOfWeek
 
 /**
@@ -22,9 +21,9 @@ import java.time.DayOfWeek
  *
  *
  */
-class LitDayRegistry {
-
-    val db : DatabaseManager = DatabaseManager()
+class LitDayRegistry(
+    private val locale: String = "la_VA"
+) {
 
     val fixedIdList = mutableListOf<DayID>()
     val moveableIdList = mutableListOf<DayID>()
@@ -44,7 +43,10 @@ class LitDayRegistry {
     }
 
     fun updateIdFromDb() {
-        TODO("DB 초기화 구현")
+        val idRepo = IdRepo()
+
+        fixedIdList += idRepo.getIdList(DayCat.FIXED_FEAST, locale)
+        moveableIdList += idRepo.getIdList(DayCat.MOVEABLE_FEAST, locale)
     }
 
     private fun rebuildIndex() {
@@ -57,7 +59,7 @@ class LitDayRegistry {
      *
      * 성탄 후 제2주일 검색 가능
      */
-    fun findSunday(temp: LitTemp, weekNo: Int): DayID? {
+    fun findSunday(temp: LitTemp, weekNo: Int): DayID {
         val sundayGrade: LitGrade = when(temp) {
 
             LitTemp.ADVENTUS,
@@ -155,11 +157,11 @@ class LitDayRegistry {
      * ID 값에 따라서 `DayID`를 반환하는 함수
      *
      */
-    fun find(idStr: String): DayID? {
+    fun find(idStr: String): DayID {
         require(DayID.validate(idStr)) {
             "Invalid ID: $idStr"
         }
-        return indexById[idStr]
+        return indexById[idStr] ?: error("Cannot find day with specified ID : $idStr")
     }
 
     fun find(
@@ -167,7 +169,7 @@ class LitDayRegistry {
         scope: String,
         grade: LitGrade,
         name: String
-    ): DayID? {
+    ): DayID {
         val sb = StringBuilder()
         sb
             .append(cat.cat).append(".")
