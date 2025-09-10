@@ -7,7 +7,7 @@ import java.time.Year
 // click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
 fun main() {
 
-    val lc = LiturgicalCalendar(Year.of(2025), "ko_KR")
+    val lc = LiturgicalCalendar(Year.of(2008), "ko_KR")
 
     lc.test()
 

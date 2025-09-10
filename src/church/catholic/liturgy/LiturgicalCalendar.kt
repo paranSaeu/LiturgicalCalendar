@@ -17,7 +17,7 @@ import java.time.temporal.TemporalAdjusters
  */
 class LiturgicalCalendar(
     private val targetYear: Year, // '올해' : 전례력을 계산할 기준 연도
-    private val locale: String = "la_VA"
+    locale: String = "la_VA"
 ) {
 
     //var calendarMap: HashMap<LocalDate, DayHash> = HashMap(400)
@@ -77,6 +77,9 @@ class LiturgicalCalendar(
 
         // 보편 전례력을 덮어쓴다.
         overrideRomanCalendar(year)
+
+        // 전례 등급의 우선 순위에 따라 날짜를 조정, 삭제한다.
+        organizeCalendar()
     }
 
     private fun calculateChristmas(year: Int): LocalDate{
@@ -766,8 +769,165 @@ class LiturgicalCalendar(
             }
     }
 
+    /**
+     * 전례일 등급과 순위에 따른 전례일 조정 함수
+     *
+     * 같은 날 여러 전례 거행이 겹치면 '전례일의 등급과 순위 표'에 따라
+     * 등급이 더 높은 축제를 지낸다.
+     * 대축일을 순위가 더 높은 다른 전례일 때문에 지낼 수 없다면,
+     * 이 규범 5항의 규정을 지키며,
+     * '전례일의 등급과 순위 표' 1-8항에 해당되지 않는 가까운 날로 옮겨 지낸다.
+     * 그러나 주님 탄생 예고 대축일이 성주간 어떤 날에 올 때에는 언제나 부활 제2주일 다음 월요일로 옮겨 지낸다.
+     *
+     * 다른 전례 거행들은 그때에는 없어진다.
+     * (cf. NUALC, n.60)
+     *
+     * 주일은 이렇게 중요하므로 대축일과 주님의 축일에만 자리를 내준다.
+     * 그러나 대림 사순 부활 시기의 주일은 모든 주님의 축일과 모든 대축일보다 앞선다.
+     * 주님 수난 성지 주일이나 주님 부활 대축일이 아닌 이런 주일에 오는 대축일들은
+     * 뒤따르는 월요일로 옮겨 지낸다.
+     * (cf. NUALC, n.5)
+     *
+     */
     private fun organizeCalendar() {
+        val firstDay = calendarMapper.getFirstDate()
 
+        generateSequence(firstDay) { it.plusDays(1) }
+            .takeWhile { it.isBefore(LocalDate.of(targetYear.value + 1, 1, 1)) }
+            .forEach { date ->
+                val originalHash = calendarMapper.find(date)
+                val idSet = originalHash.sortedItems()
+                val organizedSet = mutableSetOf<DayID>()
+                if(idSet.size > 1) {
+                   organizedSet.add(idSet[0]) // 가장 순위가 높은 하나는 반드시 넣어 준다.
+
+                    when(idSet[0].grade) {
+                        // 파스카 성삼일에는 오직 '성목요일'만 겹칠 수 있다.
+                        LitGrade.TRIDUUM_PASCHALE -> {
+                            if(idSet[1].grade == LitGrade.FERIA_V_HEBD_SANC) {
+                                organizedSet.add(idSet[1])
+                            }
+                        }
+                        LitGrade.FERIA_V_HEBD_SANC -> {
+                            error("주님 만찬 성목요일 어디감?")
+                        }
+                        LitGrade.NEAP -> {
+                            // 주님 성탄, 공현, 승천, 성령 강림에 무엇이 겹쳤으면 무시한다.
+                        }
+                        LitGrade.DOMINICA_ADV_QUAD_PASCH -> {
+                            // 대림 사순 부활 시기의 주일에 무엇이 겹쳤다면,
+                            // 그 다음에 무엇이 오는가에 따라 검증된다.
+                            for(i in 1..<idSet.size) {
+                                if(idSet[i].grade < LitGrade.PRO_VARIIS_NECESSITATIBUS_I) {
+                                    // 기원 1보다 높은 것은 대축일급 이상이다.
+                                    calendarMapper.update(
+                                            date.plusDays(1), // 주일 바로 다음날인 월요일로 이동한다.
+                                            idSet[i]
+                                        )
+                                }
+                            }
+                            // 대축일급 미만은 무시한다.
+                        }
+                        //LitGrade.PRO_DEFUNCTIS_I -> TODO()
+                        LitGrade.FERIA_IV_CINERUM -> {
+                            // 재의 수요일은 부활 46일 전이기 때문에, 2월 4일부터 3월 10일까지이다.
+                            // 이 기간에 대축일은 없기 때문에, 나머지는 모두 무시한다.
+                        }
+                        LitGrade.FERIAE_HEBD_SANCTAE -> {
+
+                            if(idSet[1].grade < LitGrade.PRO_VARIIS_NECESSITATIBUS_I) {
+                                // 성주간에 대축일이 오는 경우는 단 두 경우가 있다.
+                                // 1. 3월 19일, 복되신 동정 마리아의 배필 성 요셉 대축일
+                                // 2. 3월 25일, 주님 탄생 예고 대축일.
+
+                                // 성 요셉 대축일의 경우, 주님 수난 성지 주일 이전 토요일로 옮긴다.
+                                if(date.isEqual(LocalDate.of(targetYear.value, 3, 19))) {
+                                    calendarMapper.override( // 반복을 회귀할 수 없기 때문에 불가피하게 override를 한다.
+                                        date.with(TemporalAdjusters.previous(DayOfWeek.SATURDAY)),
+                                        DayHash(setOf(idSet[1]), litTemp = LitTemp.QUADRAGESIMAE)
+                                    )
+                                }
+
+                                // 주님 탄생 예고 대축일의 경우, 부활 제2주일 다음 월요일로 옮긴다.
+                                if(date.isEqual(LocalDate.of(targetYear.value, 3, 25))) {
+                                    calendarMapper.update(
+                                        date.plusWeeks(2).with(TemporalAdjusters.next(DayOfWeek.MONDAY)),
+                                        DayHash(setOf(idSet[1]), litTemp = LitTemp.PASCHALIS)
+                                    )
+                                }
+
+                                // 이외에는 무시한다.
+                            }
+                        }
+                        LitGrade.OCT_PASCH -> {
+                            // 부활 팔일 축제에 대축일이 겹치는 경우는 단 하나, 주님 탄생 예고 대축일이다.
+
+                            // 그 대축일을 거행할 수 있는 가장 가까운 날은 부활 제2주일 다음 월요일이다.
+                            if(date.isEqual(LocalDate.of(targetYear.value, 3, 25))) {
+                                calendarMapper.update(
+                                    date.with(TemporalAdjusters.next(DayOfWeek.MONDAY)),
+                                    DayHash(setOf(idSet[1]), litTemp = LitTemp.PASCHALIS)
+                                )
+                            }
+
+                            // 이외에는 무시한다.
+                        }
+
+                        //LitGrade.SOLLEMNITAS_GENERALIS -> TODO()
+                        //LitGrade.OMNIUM_FIDELIUM_DEFUNCTORUM -> TODO()
+                        //LitGrade.SOLLEMNITAS_PATRONI -> TODO()
+                        //LitGrade.SOLLEMNITAS_DEDICATIONIS -> TODO()
+                        //LitGrade.SOLLEMNITAS_TITULI -> TODO()
+                        //LitGrade.SOLLEMNITAS_TITULI_ORDINIS -> TODO()
+                        //LitGrade.PRO_VARIIS_NECESSITATIBUS_I -> TODO()
+                        //LitGrade.FESTUM_DOMINI -> TODO()
+                        //LitGrade.DOMINICA_NAT_ANNUM -> TODO()
+                        //LitGrade.FESTUM_GENERALIS -> TODO()
+                        //LitGrade.FESTUM_PATRONI_DIOECESIS -> TODO()
+                        //LitGrade.FESTUM_DEDICATIONIS -> TODO()
+                        //LitGrade.FESTUM_PATRONI_REGIONIS -> TODO()
+                        //LitGrade.FESTUM_TITULI_ORDINIS -> TODO()
+                        //LitGrade.ALIUM_FESTUM_ECCLESIAE -> TODO()
+                        //LitGrade.ALIUM_FESTUM_DIOECESIS -> TODO()
+                        //LitGrade.PRO_DEFUNCTIS_II -> TODO()
+                        LitGrade.FERIAE_ADV_II,
+                        LitGrade.OCT_NAT,
+                        LitGrade.FERIAE_QUAD -> {
+                            for(i in 1..<idSet.size) {
+                                if(idSet[i].grade <= LitGrade.MEMORIA_AD_LIBITUM) {
+                                    organizedSet.add(idSet[i])
+                                }
+                            }
+                        }
+                        //LitGrade.PRO_VARIIS_NECESSITATIBUS_II -> TODO()
+                        //LitGrade.MEMORIA_OBLIGATORIA -> TODO()
+                        //LitGrade.MEMORIA_PATRONI -> TODO()
+                        //LitGrade.MEMORIA_PROPRIA -> TODO()
+                        //LitGrade.MEMORIA_AD_LIBITUM -> TODO()
+                        LitGrade.FERIAE_ADV_I,
+                        LitGrade.FERIAE_NAT,
+                        LitGrade.FERIAE_PASCH,
+                        //LitGrade.PRO_DEFUNCTIS_III -> TODO()
+                        //LitGrade.PRO_VARIIS_NECESSITATIBUS_III -> TODO()
+                        LitGrade.FERIAE_PER_ANNUM -> {
+                            for(i in 1..<idSet.size) {
+                                organizedSet.add(idSet[i])
+                            }
+                        }
+                        else -> { }
+                    }
+
+                } else {
+                    organizedSet.addAll(idSet)
+                }
+                calendarMapper.override(
+                    date,
+                    DayHash(
+                        organizedSet,
+                        litTemp = originalHash.litTemp
+                    )
+                )
+            }
     }
 
     /**

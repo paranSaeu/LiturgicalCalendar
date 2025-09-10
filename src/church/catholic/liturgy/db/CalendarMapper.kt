@@ -11,7 +11,7 @@ class CalendarMapper<Date : Comparable<Date>> {
 
         for(i in calendar.keys.sorted()) {
             val text = """
-                $i : ${calendar[i]}
+                ${calendar[i]?.litTemp} $i : ${calendar[i]?.sortedItems()}
             """.trimIndent()
 
             println(text)
