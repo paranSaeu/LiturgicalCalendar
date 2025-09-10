@@ -190,7 +190,7 @@ class LitDayRegistry(
                 }
             }
         } catch (t: Throwable) {
-            t.printStackTrace()
+            //t.printStackTrace()
 
             if(weekNo == 0) {
                 // 재의 수요일 주간은 일반적인 검색을 통해 검색하기 어렵기 때문에,

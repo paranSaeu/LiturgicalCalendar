@@ -756,7 +756,7 @@ class LiturgicalCalendar(
         val firstDay: LocalDate = calendarMapper.getFirstDate()
 
         generateSequence(firstDay) { it.plusDays(1) }
-            .takeWhile { !it.isAfter(LocalDate.of(year + 1, 1, 1)) }
+            .takeWhile { it.isBefore(LocalDate.of(year + 1, 1, 1)) }
             .forEach { date ->
                 val dbDayHash = registry.findDay(date)
 
@@ -764,6 +764,10 @@ class LiturgicalCalendar(
                     calendarMapper.update(date, dbDayHash)
                 }
             }
+    }
+
+    private fun organizeCalendar() {
+
     }
 
     /**
