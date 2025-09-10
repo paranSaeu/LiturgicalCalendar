@@ -32,10 +32,10 @@ data class DayHash(
 
     fun sortedItems(): List<DayID> {
         val list = items.sortedWith(DAYID_GRADE_COMPARATOR)
-        if(list[0].grade == LitGrade.MEMORIA_AD_LIBITUM) {
-            return list.reversed()
+        return if(list[0].grade == LitGrade.MEMORIA_AD_LIBITUM) {
+            list.reversed()
         } else {
-            return list
+            list
         }
     }
 
