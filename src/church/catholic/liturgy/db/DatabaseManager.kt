@@ -104,6 +104,9 @@ object DatabaseManager {
         java.nio.file.Files.createDirectories(file.parent)
 
         val url = "jdbc:sqlite:${file.toAbsolutePath()}"
+
+        println(url)
+
         Class.forName("org.sqlite.JDBC")
         val conn = DriverManager.getConnection(url).apply {
             createStatement().use { st ->
@@ -128,17 +131,9 @@ object DatabaseManager {
     }
 
     private fun resolveBaseDir(): java.nio.file.Path {
-        val override = System.getProperty("LITURGY_DB_DIR") ?: System.getenv("LITURGY_DB_DIR")
-        if (override != null) return java.nio.file.Paths.get(override)
-
-        val os = System.getProperty("os.name").lowercase()
-        val home = System.getProperty("user.home")
-        val base = when {
-            os.contains("win") -> java.nio.file.Paths.get(System.getenv("LOCALAPPDATA") ?: "$home\\AppData\\Local")
-            os.contains("mac") -> java.nio.file.Paths.get(home, "Library", "Application Support")
-            else               -> java.nio.file.Paths.get(home, ".local", "share")
-        }
-        return base.resolve("LiturgyApp")
+        // 실행 디렉토리 (일반적으로 프로젝트 루트)
+        val root = System.getProperty("user.dir")
+        return java.nio.file.Paths.get(root, "db")
     }
 }
 
@@ -228,7 +223,7 @@ class IdRepo(private val db: DatabaseManager = DatabaseManager) {
             id      = id,
             cat     = DayCat.fromCatStr(cat),
             scope   = scope,
-            grade   = LitGrade.fromGradeStr(grade),
+            grade   = LitGrade.fromGradeInt(grade.toInt()),
             colour  = LitColour.from(colours.toInt()),
             name    = name
         )

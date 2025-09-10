@@ -3,13 +3,24 @@ package church.catholic.liturgy.db
 import church.catholic.liturgy.day.*
 import java.time.LocalDate
 
-class CalendarMapper {
+class CalendarMapper<Date : Comparable<Date>> {
 
-    val calendar: HashMap<LocalDate, DayHash> = HashMap()
+    private val calendar: HashMap<Date, DayHash> = HashMap()
 
-    fun find(date: LocalDate): DayHash {
-        return calendar.getValue(date)
+    fun test() {
+
+        for(i in calendar.keys.sorted()) {
+            val text = """
+                $i : ${calendar[i]}
+            """.trimIndent()
+
+            println(text)
+        }
     }
+
+    fun getFirstDate(): Date = calendar.keys.minOf { it }
+
+    fun find(date: Date): DayHash = calendar.getValue(date)
 
     /**
      * `calendar`의 값을 안전하게 추가해 주는 함수
@@ -23,7 +34,7 @@ class CalendarMapper {
      * 따라서, `LiturgicalCalendar`의 `calendar` 해시맵 직접 접근을 막고,
      * 안전하게 값을 추가할 수 있는 `CalendarMapper.update()`를 사용하는 것이다.
      */
-    fun update(date: LocalDate, dayHash: DayHash) {
+    fun update(date: Date, dayHash: DayHash) {
         var newDayHash: DayHash = dayHash
 
         try {
@@ -41,7 +52,7 @@ class CalendarMapper {
             newDayHash = dayHash + oldDayHash
 
         } catch (t: Throwable) {
-            t.printStackTrace()
+            //t.printStackTrace()
 
         } finally {
 
@@ -56,21 +67,26 @@ class CalendarMapper {
         }
     }
 
-    fun update(date: LocalDate, dayID: DayID, litTemp: LitTemp) {
+    fun update(date: Date, dayID: DayID, litTemp: LitTemp) {
         this.update(date, DayHash.of(dayID, litTemp = litTemp))
     }
 
-    fun update(date: LocalDate, dayID: DayID?) {
+    fun update(date: Date, dayID: DayID?) {
 
         if(dayID == null) {
             error("dayID is null")
         }
 
-        require(dayID.cat == DayCat.MOVEABLE_FEAST) {
-            "Cannot parse Liturgical Time from dayID : ${dayID.id}"
-        }
+        try {
+            val litTemp = find(date).litTemp
+            update(date, dayID, litTemp)
+        } catch (t: Throwable) {
+            require(dayID.cat == DayCat.MOVEABLE_FEAST) {
+                "Cannot parse Liturgical Time from dayID : ${dayID.id}"
+            }
 
-        this.update(date, DayHash.of(dayID, litTemp = LitTemp.fromCode(dayID.scope)))
+            this.update(date, DayHash.of(dayID, litTemp = LitTemp.fromCode(dayID.scope)))
+        }
     }
 
     /**
@@ -87,7 +103,7 @@ class CalendarMapper {
      * 기존 `HashMap.put()`의 기능을 그대로 사용할 수 있는
      * `CalendarMapper.override()`를 구현한다.
      */
-    fun override(date: LocalDate, dayHash: DayHash) {
+    fun override(date: Date, dayHash: DayHash) {
         calendar[date] = dayHash
     }
 

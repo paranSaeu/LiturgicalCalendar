@@ -12,10 +12,13 @@ data class DayHash(
 
     /** DayHash 병합 (litTemp 검증) */
     operator fun plus(other: DayHash): DayHash {
-        require(this.litTemp == other.litTemp) {
-            "Liturgical time mismatch: ${this.litTemp} vs ${other.litTemp}"
+        val resultTemp = when {
+            this.litTemp == other.litTemp -> this.litTemp
+            this.litTemp == LitTemp.NONE   -> other.litTemp
+            other.litTemp == LitTemp.NONE  -> this.litTemp
+            else -> error("Liturgical time mismatch: ${this.litTemp} vs ${other.litTemp}")
         }
-        return copy(items = items + other.items)
+        return copy(items = items + other.items, litTemp = resultTemp)
     }
 
     companion object {

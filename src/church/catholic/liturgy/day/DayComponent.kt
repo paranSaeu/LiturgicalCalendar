@@ -1,6 +1,5 @@
 package church.catholic.liturgy.day
 
-import church.catholic.liturgy.hash.IdCat
 
 enum class DayCat ( var cat: String ) {
     FIXED_FEAST             ("fix"),
@@ -16,6 +15,10 @@ enum class DayCat ( var cat: String ) {
         fun fromCatStr(cat: String): DayCat =
             entries.find { it.cat == cat } ?: error("Unknown Id Category: $cat")
     }
+
+    override fun toString(): String {
+        return this.cat
+    }
 }
 
 enum class LitTemp ( var temp: String ) {
@@ -23,12 +26,13 @@ enum class LitTemp ( var temp: String ) {
     NATIVITATIS     ("nati"),
     QUADRAGESIMAE   ("quad"),
     PASCHALIS       ("psch"),
-    PER_ANNUM       ("annu");
+    PER_ANNUM       ("annu"),
+    NONE            ("none");
 
     companion object {
         fun fromIdStr(id: String): LitTemp =
             when(DayID.validate(id)) {
-                true -> if(IdCat.fromIdStr(id) == IdCat.FIXED_FEAST) {
+                true -> if(DayCat.fromIdStr(id) == DayCat.FIXED_FEAST) {
                     error("Liturgical Time not specified for fixed feast: $id")
                 } else {
                     fromCode(id.split(".")[1])
@@ -103,48 +107,30 @@ enum class LitGrade (
     PRO_VARIIS_NECESSITATIBUS_III	(13, 3, 2), // 기원 3
     FERIAE_PER_ANNUM				(13, 4, 0); // 연중 시기 평일
 
-    val grade = {->
-        val sb: StringBuilder = StringBuilder()
+    fun grade(): String =
+        classNum.toString(16) + classLine.toString() + mode.toString()
 
-        sb.append(classNum.toHexString()).append(classLine).append(mode)
-
-        sb.toString()
-    }
-
-    override fun toString(): String {
-        return this.grade()
-    }
+    override fun toString(): String = this.grade()
 
     companion object {
-        fun decode(gradeStr: String): LitGrade{
-            val cn = Integer.parseInt(gradeStr.take(0), 16)
-            val cl = gradeStr.take(1).toInt()
-            val m = gradeStr.take(2).toInt()
-
-            for(l in entries) {
-                if(l.classNum == cn && l.classLine == cl && l.mode == m) {
-                    return l
-                }
-            }
-            return LitGrade.FERIAE_PER_ANNUM
+        fun fromGradeStr(gradeStr: String): LitGrade {
+            require(gradeStr.length == 3) { "Grade must be 3 chars: $gradeStr" }
+            val s = gradeStr.lowercase()
+            val cn = s[0].digitToInt(16) // 16진수 한 글자 (소문자/대문자 둘 다 허용)
+            val cl = s[1].digitToInt()
+            val m = s[2].digitToInt()
+            return entries.find { it.classNum == cn && it.classLine == cl && it.mode == m }
+                ?: error("Unknown Liturgical Grade Code: $gradeStr")
         }
-
-        fun decode(gradeInt: Int): LitGrade{
-            return decode(gradeInt.toHexString())
-        }
-
-        fun fromGradeStr(gradeStr: String): LitGrade =
-            entries.find { it.grade() == gradeStr } ?: error("Unknown Liturgical Grade Code: $gradeStr")
 
         fun fromGradeInt(gradeInt: Int): LitGrade =
-            fromGradeStr(gradeInt.toHexString())
+            fromGradeStr(String.format("%03x", gradeInt)) // 소문자 hex
 
-        fun fromIdStr(id: String): LitGrade =
-            when(DayID.validate(id)) {
-                true -> fromGradeStr(id.split(".")[2])
-                else -> error("Invalid Id: $id")
-            }
-
+        fun fromIdStr(id: String): LitGrade {
+            require(DayID.validate(id)) { "Invalid Id: $id" }
+            val gradeToken = id.split(".")[2]
+            return fromGradeStr(gradeToken)
+        }
     }
 }
 

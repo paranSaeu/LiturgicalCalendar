@@ -30,7 +30,7 @@ data class DayID(
         name    = name
     )
 
-    override fun toString(): String = id
+    override fun toString(): String = name
 
     fun validate() {
         require(validate(this.id)) {
@@ -150,7 +150,7 @@ data class DayID(
             val id = buildString {
                 append(cat.cat).append(".")
                 append(scope).append(".")
-                append(grade.grade).append(".")
+                append(grade.toString()).append(".")
                 append(idName)
             }
             return DayID(id, colour, name) // 보조 생성자 경유 → 파싱/검증 일원화

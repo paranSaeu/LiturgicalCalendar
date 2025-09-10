@@ -16,19 +16,21 @@ import java.time.temporal.TemporalAdjusters
  *
  */
 class LiturgicalCalendar(
-    val targetYear: Year // '올해' : 전례력을 계산할 기준 연도
+    private val targetYear: Year, // '올해' : 전례력을 계산할 기준 연도
+    private val locale: String = "la_VA"
 ) {
 
     //var calendarMap: HashMap<LocalDate, DayHash> = HashMap(400)
-    val calendarMapper = CalendarMapper()
-    val registry = LitDayRegistry()
+    private val calendarMapper = CalendarMapper<LocalDate>()
+    private val registry = LitDayRegistry(locale)
 
     // 연도를 매개변수로 전달하기 쉽도록 전환
 
-    val initOrdinaryI:    LocalDate // '올해' 주님 세례
-    val endOrdinaryI:     LocalDate // 재의 수요일
-    val initOrdinaryII:   LocalDate // 성령 강림
-    val endOrdinaryII:    LocalDate // '올해' 대림 제1주일
+    private val initOrdinaryI:    LocalDate // '올해' 주님 세례
+    private val endOrdinaryI:     LocalDate // 재의 수요일
+    private val initOrdinaryII:   LocalDate // 성령 강림
+    private val endOrdinaryII:    LocalDate // '올해' 대림 제1주일
+
 
     // 생성자에서 계산을 바로 시도한다.
     init {
@@ -56,8 +58,7 @@ class LiturgicalCalendar(
          * 5. 보편 전례력 삽입
          */
 
-        println("작년") // 작년 주님 성탄
-
+        // 작년 주님 성탄
         // calculateChristmas()는 targetYear와 매개변수를 비교해서,
         // 매개변수가 '작년'이면 '주님 세례'를 반환한다.
         initOrdinaryI = calculateChristmas(year - 1)
@@ -69,11 +70,13 @@ class LiturgicalCalendar(
         initOrdinaryII = endOrdinaryI.plusDays(95)
 
         // 올해 주님 성탄
-        println("올해")
         endOrdinaryII = calculateChristmas(year)
 
         // 올해 연중 시기 연결
         calculateOrdinaryTime()
+
+        // 보편 전례력을 덮어쓴다.
+        overrideRomanCalendar(year)
     }
 
     private fun calculateChristmas(year: Int): LocalDate{
@@ -82,7 +85,7 @@ class LiturgicalCalendar(
 
         calendarMapper.update(
             christmas,
-            registry.find("fix.1225.210.natdo"),
+            registry.find(LitDayRegistry.Core.NATIVITATIS),
             LitTemp.NATIVITATIS
         )
 
@@ -107,8 +110,7 @@ class LiturgicalCalendar(
          * LocalDate da4는 불변하는 인스턴스(Immutable Instance)이기 때문에,
          * da4를 기준으로 계산한다.
          */
-        for (i in 3..1) {
-
+        for (i in 1..3) {
             calendarMapper.update(
                 da4.minusWeeks(4L - i),
                 registry.findSunday(LitTemp.ADVENTUS, i)
@@ -166,20 +168,76 @@ class LiturgicalCalendar(
                 continue  // 12월 17일 - 24일 사이에 주일이 오는 경우가 있으므로
             }
 
-            val id = buildString {
-                append("fix").append(".")
-                append("12").append(day).append(".")
-                append(LitGrade.FERIAE_ADV_II).append(".")
-                append("die").append(day)
-            }
-
             calendarMapper.override(
                 d,
                 DayHash.of(
-                    registry.find(id),
+                    registry.find(LitDayRegistry.Core.FERIAE_ADV_II()[day]),
                     litTemp = LitTemp.ADVENTUS
                 )
             )
+        }
+
+        /*
+         * 연말 성탄 시기
+         *
+         * 성탄 시기는 주님 성탄 대축일 제1 저녁 기도부터 시작하여
+         * 주님 공현 대축일 곧 1월 6일 다음 주일까지 계속된다.
+         * (cf. NUALC, n.33)
+         * 1월 6일 다음 주일에는 주님 세례 축일을 지낸다.
+         * (cf. NUALC, n.6 §2)
+         *
+         * 이상에서, 주님 성탄 대축일 제1 저녁 기도부터 주님 세례 축일까지를
+         * 성탄 시기라고 생각할 수 있다.
+         *
+         * 다만 이 함수의 특성상, return value 결정에서 '내년'은 포함할 수 없기 때문에,
+         * 여기서는 12월 26일부터 31일까지 연말 성탄 시기만 먼저 입력하도록 한다.
+         * 입력 연도 판별 이후 계산 내용과 반환값이 결정될 것이다.
+         *
+         * 연말의 성탄 시기 계산에서 주의할 점은 다음과 같다.
+         *         - 성탄 팔일 축제. (cf. NUALC, n.35) 날짜가 고정되어 있다.
+         *         - 팔일 축제의 주일에 예수, 마리아, 요셉의 성가정 축일을 지낸다.
+         *           그러나 팔일 축제 안에 주일이 없으면 12월 30일에 지낸다.
+         *           (cf. NUALC, n.35 §1)
+         *
+         */
+
+        // 성가정 축일, 천주의 성모 마리아 대축일이 포함되지 않은 전례일을 입력한다.
+        for(day in 26..31) {
+            // 매 루프 초기화된다.
+            val d: LocalDate = LocalDate.of(year, 12, day)
+
+            calendarMapper.update(
+                d,
+                registry.find(LitDayRegistry.Core.OCT_NAT()[day]),
+                litTemp = LitTemp.NATIVITATIS
+            )
+        }
+
+        /*
+         * 예수, 마리아, 요셉의 성가정 축일
+         *
+         * 팔일 축제의 주일에 예수, 마리아, 요셉의 성가정 축일을 지낸다.
+         * 그러나 팔일 축제 안에 주일이 없으면 12월 30일에 지낸다.
+         * (cf. NUALC, n.35 §1)
+         *
+         * 주님 성탄이 주일인 때, 팔일 축제 안에 주일이 없게 된다.
+         */
+        val familiae = registry.find(LitDayRegistry.Core.FAMILIAE)
+        if (christmas.getDayOfWeek() === DayOfWeek.SUNDAY) {
+            calendarMapper.update(
+                LocalDate.of(year, 12, 30),
+                familiae
+            )
+        } else {
+            for (i in 1L..7L) {
+                val d: LocalDate = christmas.plusDays(i)
+                if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
+                    calendarMapper.update(
+                        d,
+                        familiae
+                    )
+                }
+            }
         }
 
         /**
@@ -204,10 +262,17 @@ class LiturgicalCalendar(
          * '올해 주님 세례 축일'과 '올해 대림 제1주일'이
          * 연중 시기 계산을 위해 필요하다는 것을 고려하면,
          *
-         * 첫째 실행에서, 이 함수는 '주님 세례'를 반환하고,
-         * 둘째 실행에서, 이 함수는 '대림 제1주일'을 반환해야 한다.
+         * 첫째 실행(작년 계산)에서, 이 함수는 '주님 세례'를 반환하고,
+         * 둘째 실행(올해 계산)에서, 이 함수는 '대림 제1주일'을 반환해야 한다.
          */
-        return if(this.targetYear.value == year + 1) {
+        if(this.targetYear.value == year) {
+
+            // 올해를 계산하고 있으면, 다음 해 부분의 계산은 건너뛰고
+            // 대림 제1주일을 반환한다.
+            return da4.minusWeeks(3)
+
+        } else {
+
             // '작년'을 계산하고 있으면 '다음 해' 곧 올해분을 계산하고 주님 세례를 반환한다.
 
             // 1-나. 다음 해 주님 공현, 주님 세례
@@ -268,20 +333,15 @@ class LiturgicalCalendar(
             /*
              * 1-다. 연초 성탄 시기
              *
-             * 성탄 시기는 주님 성탄 대축일 제1 저녁 기도부터 시작하여
-             * 주님 공현 대축일 곧 1월 6일 다음 주일까지 계속된다.
-             * (cf. NUALC, n.33)
-             * 1월 6일 다음 주일에는 주님 세례 축일을 지낸다.
-             * (cf. NUALC, n.6 §2)
+             * 위에서는 연말 성탄 시기를 계산했다면, 여기서는 연초 성탄 시기를 계산한다.
+             * '주님 성탄'을 중심으로 전개하는 특성상,
+             * 연초의 성탄 시기를 계산하기 위해서는 작년 주님 성탄과 연계하여야 한다.
+             * 따라서 '작년'을 계산하고 있음이 확실한 이 부분 플로우에서
+             * 연초 성탄 시기를 계산한다.
              *
-             * 이상에서, 주님 성탄 대축일 제1 저녁 기도부터 주님 세례 축일까지를
-             * 성탄 시기라고 생각할 수 있다.
-             *
-             * 성탄 시기 계산에 주의할 점은 다음과 같다.
-             *         - 성탄 팔일 축제. (cf. NUALC, n.35) 날짜가 고정되어 있다.
-             *         - 팔일 축제의 주일에 예수, 마리아, 요셉의 성가정 축일을 지낸다.
-             *           그러나 팔일 축제 안에 주일이 없으면 12월 30일에 지낸다.
-             *           (cf. NUALC, n.35 §1)
+             * 연초의 성탄 시기 계산에 주의할 점은 다음과 같다.
+             *         - 1월 1일은 천주의 성모 마리아 대축일을 지낸다.
+             *           (cf. NUALC, n.35 §6)
              *         - 1월 2일과 5일 사이에 오는 주일은 성탄 후 제2주일이다.
              *           (cf. NUALC, n.36)
              *         - 주님 공현 전에 오는 평일은 '주님 공현 전 n요일',
@@ -289,34 +349,12 @@ class LiturgicalCalendar(
              *           전례문은 공통된 부분도 있고, 다른 부분도 있다.
              */
 
-            // 성탄 팔일 축제는 날짜가 고정되어 있으므로, 보편 전례력 부분에서 처리한다.
-
-            /*
-             * 예수, 마리아, 요셉의 성가정 축일
-             *
-             * 팔일 축제의 주일에 예수, 마리아, 요셉의 성가정 축일을 지낸다.
-             * 그러나 팔일 축제 안에 주일이 없으면 12월 30일에 지낸다.
-             * (cf. NUALC, n.35 §1)
-             *
-             * 주님 성탄이 주일인 때, 팔일 축제 안에 주일이 없게 된다.
-             */
-            if (christmas.getDayOfWeek() === DayOfWeek.SUNDAY) {
-                calendarMapper.update(
-                    LocalDate.of(year, 12, 30),
-                    registry.find("mov.nati.510.famil")
-                )
-            } else {
-                for (i in 1L..7L) {
-                    val d: LocalDate = christmas.plusDays(i)
-                    if (d.getDayOfWeek() === DayOfWeek.SUNDAY) {
-                        calendarMapper.update(
-                            d,
-                            registry.find("mov.nati.510.famil")
-                        )
-                    }
-                }
-            }
-
+            // 천주의 성모 마리아 대축일
+            calendarMapper.update(
+                LocalDate.of(year + 1, 1, 1),
+                registry.find(LitDayRegistry.Core.DEI_GENETRICIS),
+                litTemp = LitTemp.NATIVITATIS
+            )
 
             /*
              * 성탄 후 제2주일
@@ -378,12 +416,7 @@ class LiturgicalCalendar(
             }
 
             // 작년을 계산하고 있었기 때문에, 주님 세례를 반환한다.
-            baptismate
-
-        } else {
-            // 올해를 계산하고 있으면, 다음 해 부분의 계산은 건너뛰고
-            // 대림 제1주일을 반환한다.
-            da4.minusWeeks(3)
+            return baptismate
         }
     }
 
@@ -411,7 +444,7 @@ class LiturgicalCalendar(
                 easter.minusDays(i),
                 registry.find(
                     DayCat.MOVEABLE_FEAST,
-                    LitTemp.PASCHALIS.toString(),
+                    LitTemp.QUADRAGESIMAE.toString(),
                     LitGrade.TRIDUUM_PASCHALE,
                     when(i) {
                         1L -> "sabsa"   // 1일 전 : 성토요일
@@ -494,12 +527,14 @@ class LiturgicalCalendar(
         val cinerum: LocalDate = easter.minusDays(46)
 
         for (i in 3..6) {
+            val d = cinerum.with(DayOfWeek.of(i))
+
             calendarMapper.update(
-                cinerum.with(DayOfWeek.of(i)),
+                d,
                 registry.findWeekdays(
                     LitTemp.QUADRAGESIMAE,
                     0   // 재의 수요일과 재의 수요일 다음 평일은 DB에서 사순 제0주일로 간주한다. (다만 수요일부터 있음)
-                )[cinerum.dayOfWeek]
+                )[d.dayOfWeek]
             )
         }
 
@@ -715,6 +750,22 @@ class LiturgicalCalendar(
         }
     }
 
+    private fun overrideRomanCalendar(year: Int) {
+        // 작년 분을 덮어쓴다.
+
+        val firstDay: LocalDate = calendarMapper.getFirstDate()
+
+        generateSequence(firstDay) { it.plusDays(1) }
+            .takeWhile { !it.isAfter(LocalDate.of(year + 1, 1, 1)) }
+            .forEach { date ->
+                val dbDayHash = registry.findDay(date)
+
+                if(dbDayHash != null) {
+                    calendarMapper.update(date, dbDayHash)
+                }
+            }
+    }
+
     /**
      * 주님 부활의 날짜 계산
      *
@@ -801,4 +852,9 @@ class LiturgicalCalendar(
 
         return LocalDate.of(year, n, p)
     }
+
+    fun test() {
+        calendarMapper.test()
+    }
 }
+
