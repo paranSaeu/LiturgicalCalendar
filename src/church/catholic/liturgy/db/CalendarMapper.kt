@@ -1,22 +1,21 @@
 package church.catholic.liturgy.db
 
 import church.catholic.liturgy.day.*
-import java.time.LocalDate
 
 class CalendarMapper<Date : Comparable<Date>> {
 
     private val calendar: HashMap<Date, DayHash> = HashMap()
 
-    fun test() {
-
-        for(i in calendar.keys.sorted()) {
-            val text = """
-                ${calendar[i]?.litTemp} $i : ${calendar[i]?.sortedItems()}
-            """.trimIndent()
-
-            println(text)
-        }
-    }
+//    fun test() {
+//
+//        for(i in calendar.keys.sorted()) {
+//            val text = """
+//                ${calendar[i]?.litTemp} $i : ${calendar[i]?.sortedItems()}
+//            """.trimIndent()
+//
+//            println(text)
+//        }
+//    }
 
     fun getFirstDate(): Date = calendar.keys.minOf { it }
 

@@ -267,7 +267,7 @@ class LitDayRegistry(
         return find(coreConst!!.getId())
     }
 
-    fun findDay(date: LocalDate): DayHash?{
+    fun findDayHash(date: LocalDate): DayHash?{
 
         val md: MonthDay = MonthDay.of(
             date.month,
